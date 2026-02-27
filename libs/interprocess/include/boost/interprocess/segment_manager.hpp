@@ -282,8 +282,7 @@ class segment_manager_base
                                  , 0);
 
       //Allocate memory
-      void *ptr_struct = this->allocate_aligned
-         (block_info.total_size(), size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT), nothrow<>::get());
+      void *ptr_struct = this->allocate(block_info.total_size(), nothrow<>::get());
 
       //Check if there is enough memory
       if(!ptr_struct){
@@ -1141,12 +1140,12 @@ class segment_manager
 
       //Check if there is enough memory
       if(dothrow){
-         buffer_ptr = this->allocate_aligned
-            (block_info.template total_size_with_header<intrusive_value_type>(), size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT));
+         buffer_ptr = this->allocate
+            (block_info.template total_size_with_header<intrusive_value_type>());
       }
       else{
-         buffer_ptr = this->allocate_aligned
-            (block_info.template total_size_with_header<intrusive_value_type>(), size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT), nothrow<>::get());
+         buffer_ptr = this->allocate
+            (block_info.template total_size_with_header<intrusive_value_type>(), nothrow<>::get());
          if(!buffer_ptr)
             return 0;
       }
@@ -1267,10 +1266,10 @@ class segment_manager
       if(is_node_index_t::value){
          size_type total_size = block_info.template total_size_with_header<index_it>();
          if(dothrow){
-            buffer_ptr = this->allocate_aligned(total_size, size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT));
+            buffer_ptr = this->allocate(total_size);
          }
          else{
-            buffer_ptr = this->allocate_aligned(total_size, size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT), nothrow<>::get());
+            buffer_ptr = this->allocate(total_size, nothrow<>::get());
             if(!buffer_ptr)
                return 0;
          }
@@ -1279,10 +1278,10 @@ class segment_manager
       }
       else{
          if(dothrow){
-            buffer_ptr = this->allocate_aligned(block_info.total_size(), size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT));
+            buffer_ptr = this->allocate(block_info.total_size());
          }
          else{
-            buffer_ptr = this->allocate_aligned(block_info.total_size(), size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT), nothrow<>::get());
+            buffer_ptr = this->allocate(block_info.total_size(), nothrow<>::get());
             if(!buffer_ptr)
                return 0;
          }

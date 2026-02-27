@@ -76,15 +76,6 @@ class mem_algo_deallocator
    {  if(m_ptr) m_algo.deallocate(m_ptr);  }
 };
 
-//!Define the minimum alignment for all block allocations.
-//!Must be a power of two >= alignof(max_align_t). Setting this to a large
-//!value (e.g. 128) ensures that constructed objects are properly aligned for
-//!over-aligned types at the cost of some wasted padding.  Users may override
-//!this before including any Interprocess header.
-#if !defined(BOOST_INTERPROCESS_BLOCK_ALIGNMENT)
-#define BOOST_INTERPROCESS_BLOCK_ALIGNMENT 128
-#endif
-
 template<class size_type>
 struct block_header
 {
@@ -127,7 +118,8 @@ struct block_header
    {
       return get_rounded_size
                ( size_type(sizeof(Header))
-            , size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT))
+            , size_type(::boost::container::dtl::alignment_of
+                  < ::boost::container::dtl::max_align_t >::value))
            + total_size();
    }
 
@@ -200,7 +192,8 @@ struct block_header
       block_header<size_type> * hdr =
          move_detail::force_ptr<block_header<size_type>*>(reinterpret_cast<char*>(header) +
        get_rounded_size( size_type(sizeof(Header))
-                       , size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT)));
+                       , size_type(::boost::container::dtl::alignment_of
+                           < ::boost::container::dtl::max_align_t >::value)));
       //Some sanity checks
       return hdr;
    }
@@ -211,7 +204,8 @@ struct block_header
       Header * hdr =
          move_detail::force_ptr<Header*>(reinterpret_cast<char*>(bheader) -
        get_rounded_size( size_type(sizeof(Header))
-                       , size_type(BOOST_INTERPROCESS_BLOCK_ALIGNMENT)));
+                       , size_type(::boost::container::dtl::alignment_of
+                           < ::boost::container::dtl::max_align_t >::value)));
       //Some sanity checks
       return hdr;
    }
@@ -284,7 +278,8 @@ struct intrusive_value_type_impl
 
    intrusive_value_type_impl(){}
 
-   enum  {  BlockHdrAlignment = BOOST_INTERPROCESS_BLOCK_ALIGNMENT  };
+   enum  {  BlockHdrAlignment = ::boost::container::dtl::alignment_of
+               < ::boost::container::dtl::max_align_t >::value  };
 
    block_header<size_type> *get_block_header() const
    {
