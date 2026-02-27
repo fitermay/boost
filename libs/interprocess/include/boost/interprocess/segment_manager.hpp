@@ -75,6 +75,7 @@ class segment_manager_base
    typedef segment_manager_base<MemoryAlgorithm> segment_manager_base_type;
    typedef typename MemoryAlgorithm::void_pointer  void_pointer;
    typedef typename MemoryAlgorithm::mutex_family  mutex_family;
+   static const std::size_t MemAlignment = MemoryAlgorithm::Alignment;
    typedef MemoryAlgorithm memory_algorithm;
 
    #if !defined(BOOST_INTERPROCESS_DOXYGEN_INVOKED)
@@ -275,14 +276,27 @@ class segment_manager_base
       (size_type num, bool dothrow, ipcdetail::in_place_interface &table)
    {
       typedef ipcdetail::block_header<size_type> block_header_t;
+      const std::size_t t_alignment = table.alignment;
       block_header_t block_info (  size_type(table.size*num)
-                                 , size_type(table.alignment)
+                                 , size_type(t_alignment)
                                  , anonymous_type
                                  , 1
                                  , 0);
 
+      const std::size_t alloc_alignment = t_alignment > MemAlignment ? t_alignment : MemAlignment;
+
+      //Compute total size and front_space at runtime since t_alignment may be > MemAlignment
+      const std::size_t total_prefix = ipcdetail::get_rounded_size(std::size_t(sizeof(block_header_t)), alloc_alignment);
+      const std::size_t front_space = total_prefix - sizeof(block_header_t);
+      const std::size_t total_size = total_prefix + block_info.m_value_bytes;
+
       //Allocate memory
-      void *ptr_struct = this->allocate(block_info.total_size(), nothrow<>::get());
+      #if (BOOST_INTERPROCESS_SEGMENT_MANAGER_ABI < 2)
+      (void)alloc_alignment;
+      void *ptr_struct = this->allocate(total_size, nothrow<>::get());
+      #else
+      void *ptr_struct = this->allocate_aligned(total_size, alloc_alignment, nothrow<>::get());
+      #endif
 
       //Check if there is enough memory
       if(!ptr_struct){
@@ -298,9 +312,11 @@ class segment_manager_base
       ipcdetail::mem_algo_deallocator<MemoryAlgorithm> mem(ptr_struct, *this);
 
       //Now construct the header
-      block_header_t * hdr = ::new(ptr_struct, boost_container_new_t()) block_header_t(block_info);
+      block_header_t * hdr = ::new((char*)ptr_struct + front_space, boost_container_new_t()) block_header_t(block_info);
+      BOOST_ASSERT(is_ptr_aligned(hdr));
       void *ptr = 0; //avoid gcc warning
       ptr = hdr->value();
+      BOOST_ASSERT(is_ptr_aligned(ptr, t_alignment));
 
       //Now call constructors
       ipcdetail::array_construct(ptr, num, table);
@@ -310,9 +326,9 @@ class segment_manager_base
       return ptr;
    }
 
-   //!Calls the destructor and makes an anonymous deallocate
    void prot_anonymous_destroy(const void *object, ipcdetail::in_place_interface &table)
    {
+      BOOST_ASSERT(is_ptr_aligned(object, table.alignment));
 
       //Get control data from associated with this object
       typedef ipcdetail::block_header<size_type> block_header_t;
@@ -331,7 +347,12 @@ class segment_manager_base
       //Build scoped ptr to avoid leaks with destructor exception
       std::size_t destroyed = 0;
      table.destroy_n(const_cast<void*>(object), ctrl_data->m_value_bytes/table.size, destroyed);
-      this->deallocate(ctrl_data);
+
+      const std::size_t t_alignment = table.alignment;
+      const std::size_t alloc_alignment = t_alignment > MemAlignment ? t_alignment : MemAlignment;
+      const std::size_t total_prefix = ipcdetail::get_rounded_size(std::size_t(sizeof(block_header_t)), alloc_alignment);
+      const std::size_t front_space = total_prefix - sizeof(block_header_t);
+      this->deallocate((char*)ctrl_data - front_space);
    }
    #endif   //#ifndef BOOST_INTERPROCESS_DOXYGEN_INVOKED
 };
@@ -376,6 +397,7 @@ class segment_manager
    typedef segment_manager_base<MemoryAlgorithm>   segment_manager_base_type;
 
    static const size_type PayloadPerAllocation = segment_manager_base_t::PayloadPerAllocation;
+   static const size_type MemAlignment         = segment_manager_base_t::MemAlignment;
 
    #if !defined(BOOST_INTERPROCESS_DOXYGEN_INVOKED)
    private:
@@ -781,6 +803,7 @@ class segment_manager
 
    void priv_destroy_ptr(const void *ptr, ipcdetail::in_place_interface &dtor)
    {
+      BOOST_ASSERT(is_ptr_aligned(ptr, dtor.alignment));
       block_header_t *ctrl_data = block_header_t::block_header_from_value(ptr, dtor.size, dtor.alignment);
       switch(ctrl_data->alloc_type()){
          case anonymous_type:
@@ -971,7 +994,6 @@ class segment_manager
 
       block_header_t *ctrl_data = it->get_block_header();
       intrusive_value_type *iv = intrusive_value_type::get_intrusive_value_type(ctrl_data);
-      void *memory = iv;
       void *values = ctrl_data->value();
       std::size_t num = ctrl_data->m_value_bytes/table.size;
 
@@ -982,9 +1004,17 @@ class segment_manager
       //Erase node from index
       index.erase(it);
 
+      const std::size_t t_alignment = table.alignment;
+      const std::size_t alloc_alignment =
+         t_alignment > MemAlignment ? t_alignment : MemAlignment;
+
+      const std::size_t front_space = block_header_t::template rt_front_space_with_header<intrusive_value_type>(alloc_alignment);
+
       //Destroy the headers
       ctrl_data->~block_header_t();
       iv->~intrusive_value_type();
+
+      void *memory = (char*)iv - front_space;
 
       //Call destructors and free memory
       std::size_t destroyed;
@@ -1052,14 +1082,19 @@ class segment_manager
       ctrl_data->~block_header_t();
 
       void *memory;
+      const std::size_t t_alignment = table.alignment;
+      const std::size_t alloc_alignment =
+         t_alignment > MemAlignment ? t_alignment : MemAlignment;
       if(is_node_index_t::value){
          index_it *ihdr = block_header_t::template
             to_first_header<index_it>(ctrl_data);
          ihdr->~index_it();
-         memory = ihdr;
+         const std::size_t front_space = block_header_t::template rt_front_space_with_header<index_it>(alloc_alignment);
+         memory = (char*)ihdr - front_space;
       }
       else{
-         memory = ctrl_data;
+         const std::size_t front_space = block_header_t::rt_front_space_no_header(alloc_alignment);
+         memory = (char*)ctrl_data - front_space;
       }
 
       //Call destructors and free memory
@@ -1138,20 +1173,35 @@ class segment_manager
       //Allocates buffer for name + data, this can throw (it hurts)
       void *buffer_ptr;
 
+      const std::size_t t_alignment = table.alignment;
+      const std::size_t alloc_alignment = t_alignment > MemAlignment ? t_alignment : MemAlignment;
+      size_type total_size = block_info.template rt_total_size_with_header<intrusive_value_type>(alloc_alignment);
+      const std::size_t front_space = block_header_t::template rt_front_space_with_header<intrusive_value_type>(alloc_alignment);
+
       //Check if there is enough memory
+      #if (BOOST_INTERPROCESS_SEGMENT_MANAGER_ABI < 2)
+      (void)alloc_alignment;
       if(dothrow){
-         buffer_ptr = this->allocate
-            (block_info.template total_size_with_header<intrusive_value_type>());
+         buffer_ptr = this->allocate(total_size);
       }
       else{
-         buffer_ptr = this->allocate
-            (block_info.template total_size_with_header<intrusive_value_type>(), nothrow<>::get());
+         buffer_ptr = this->allocate(total_size, nothrow<>::get());
          if(!buffer_ptr)
             return 0;
       }
+      #else
+      if(dothrow){
+         buffer_ptr = this->allocate_aligned(total_size, alloc_alignment);
+      }
+      else{
+         buffer_ptr = this->allocate_aligned(total_size, alloc_alignment, nothrow<>::get());
+         if(!buffer_ptr)
+            return 0;
+      }
+      #endif
 
       //Now construct the intrusive hook plus the header
-      intrusive_value_type * intrusive_hdr = ::new(buffer_ptr, boost_container_new_t()) intrusive_value_type();
+      intrusive_value_type * intrusive_hdr = ::new((char*)buffer_ptr + front_space, boost_container_new_t()) intrusive_value_type();
       block_header_t * hdr = ::new(intrusive_hdr->get_block_header(), boost_container_new_t())block_header_t(block_info);
       void *ptr = 0; //avoid gcc warning
       ptr = hdr->value();
@@ -1262,9 +1312,15 @@ class segment_manager
       void *buffer_ptr;
       block_header_t * hdr;
 
+      const std::size_t t_alignment = table.alignment;
+      const std::size_t alloc_alignment = t_alignment > MemAlignment ? t_alignment : MemAlignment;
+
       //Allocate and construct the headers
       if(is_node_index_t::value){
-         size_type total_size = block_info.template total_size_with_header<index_it>();
+         size_type total_size = block_info.template rt_total_size_with_header<index_it>(alloc_alignment);
+         const std::size_t front_space = block_header_t::template rt_front_space_with_header<index_it>(alloc_alignment);
+         #if (BOOST_INTERPROCESS_SEGMENT_MANAGER_ABI < 2)
+         (void)alloc_alignment;
          if(dothrow){
             buffer_ptr = this->allocate(total_size);
          }
@@ -1273,19 +1329,43 @@ class segment_manager
             if(!buffer_ptr)
                return 0;
          }
-         index_it *idr = ::new(buffer_ptr, boost_container_new_t()) index_it(it);
-         hdr = block_header_t::template from_first_header<index_it>(idr);
-      }
-      else{
+         #else
          if(dothrow){
-            buffer_ptr = this->allocate(block_info.total_size());
+            buffer_ptr = this->allocate_aligned(total_size, alloc_alignment);
          }
          else{
-            buffer_ptr = this->allocate(block_info.total_size(), nothrow<>::get());
+            buffer_ptr = this->allocate_aligned(total_size, alloc_alignment, nothrow<>::get());
             if(!buffer_ptr)
                return 0;
          }
-         hdr = static_cast<block_header_t*>(buffer_ptr);
+         #endif
+         index_it *idr = ::new((char*)buffer_ptr + front_space, boost_container_new_t()) index_it(it);
+         hdr = block_header_t::template from_first_header<index_it>(idr);
+      }
+      else{
+         size_type total_size = block_info.rt_total_size(alloc_alignment);
+         const std::size_t front_space = block_header_t::rt_front_space_no_header(alloc_alignment);
+         #if (BOOST_INTERPROCESS_SEGMENT_MANAGER_ABI < 2)
+         (void)alloc_alignment;
+         if(dothrow){
+            buffer_ptr = this->allocate(total_size);
+         }
+         else{
+            buffer_ptr = this->allocate(total_size, nothrow<>::get());
+            if(!buffer_ptr)
+               return 0;
+         }
+         #else
+         if(dothrow){
+            buffer_ptr = this->allocate_aligned(total_size, alloc_alignment);
+         }
+         else{
+            buffer_ptr = this->allocate_aligned(total_size, alloc_alignment, nothrow<>::get());
+            if(!buffer_ptr)
+               return 0;
+         }
+         #endif
+         hdr = reinterpret_cast<block_header_t*>((char*)buffer_ptr + front_space);
       }
 
       hdr = ::new(hdr, boost_container_new_t())block_header_t(block_info);
